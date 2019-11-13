@@ -8,6 +8,7 @@
 		- [3.3Data Member的存取](#33data-member的存取)
 		- [3.4继承与Data Member](#34继承与data-member)
 	- [4.Function语意学](#4function语意学)
+		- [4.1Member的各种调用方式](#41member的各种调用方式)
 
 <!-- /TOC -->
 # 深度探索c++对象模型
@@ -74,3 +75,14 @@ object储存指向member和functionmember的指针。
   * 对于负担不一致的问题，MS编译器通过virtual base class table来实现，将真正的指针放在table中，class只需要一个指针即可。
   * 对于负担不一致问题，另一种方案是在virtual function table中放置虚基类的offset，这样同样可以将虚基类公用一个实体。
 ## 4.Function语意学
+### 4.1Member的各种调用方式
+* nonstatic member functions
+  选择member function不会带来什么额外的负担，因为编译器将member函数实例转换为nomember函数实例。
+* virtual member function
+`ptr->normalize();`会被转换为`(*ptr->vptr[1](ptr));`
+* static member functions
+  将被转换为一般的nonmember函数调用。当class设计者希望支持没有class object的情况时，可以吧0地址转换为this指针，如`object_count( (ClassPointer) 0);`
+  静态成员函数主要特性就在于其没有this指针，可以归纳为:
+  * 不能够直接存取class中的nonstatic members
+  * 不能被声明为const，volatile或virtual
+  * 不需要经由class object被调用(虽然大多如此)

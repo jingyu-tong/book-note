@@ -13,3 +13,7 @@
     接下来，通过IO复用接口以及tvp设置的阻塞事件，获取待处理事件。这里IO复用通过aeApiPoll形式的统一接口进行封装，配合宏定义，使得能够跨平台的同时，能够使用平台下最好的复用技术。
     ![epoll复用](/assets/epoll复用_nlqv266p5.png)
     这里以epoll为例，epoll被唤醒后，对evenLoop中的fired进行设置唤醒描述符和事件。
+    ![执行回调](/assets/执行回调.png)
+  * 执行回调
+    然后再events中找出fired.fd对应的文件封装，根据mask执行回调。
+    再执行完文件事件后，再通过processTimeEvents来处理时间事件。
