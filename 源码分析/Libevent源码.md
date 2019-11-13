@@ -2,7 +2,9 @@
 
 - [Libevent源码阅读笔记](#libevent源码阅读笔记)
 	- [1.简单例子](#1简单例子)
-	- [2.事件Event结构](#2事件event结构)
+	- [2.事件Event](#2事件event)
+		- [2.1Event结构](#21event结构)
+		- [2.2Event相关设置](#22event相关设置)
 
 <!-- /TOC -->
 # Libevent源码阅读笔记
@@ -49,7 +51,8 @@ libevent是一个轻量级的基于Reactor的高性能网络库，今天开始�
   ```
 libevent采用Reactor模式，上述简单的例子描绘了libevent简单的使用流程，首先要实例化一个Reactor，然后设置回调，并且绑定到Reactor中，接着添加事件到事件队列，然后开始事件循环。效果如下，每个1s触发一次事件。
 ![libeventdemo](/assets/libeventdemo.png)
-## 2.事件Event结构
+## 2.事件Event
+### 2.1Event结构
 Event的定义如下：
 ```c
 struct event {
@@ -104,3 +107,29 @@ struct event {
   #define	TAILQ_PREV(elm, headname, field) \
 	(*(((struct headname *)((elm)->field.tqe_prev))->tqh_last))
   ```
+  因为这种特殊的结构，TAILQ访问后继和前驱的效率相差很大，后继只要找到filed的next就行。而前驱需要找到当前节点前驱的前驱的next再解引用，要复杂的多。
+### 2.2Event相关设置
+```c
+void
+event_set(struct event *ev, int fd, short events,
+	  void (*callback)(int, short, void *), void *arg)
+{
+	/* Take the current base - caller needs to set the real base later */
+	ev->ev_base = current_base;
+
+	ev->ev_callback = callback;
+	ev->ev_arg = arg;
+	ev->ev_fd = fd;
+	ev->ev_events = events;
+	ev->ev_res = 0;
+	ev->ev_flags = EVLIST_INIT;
+	ev->ev_ncalls = 0;
+	ev->ev_pncalls = NULL;
+
+	min_heap_elem_init(ev);
+
+	/* by default, we put new events into the middle priority */
+	if(current_base)
+		ev->ev_pri = current_base->nactivequeues/2;
+}
+```
