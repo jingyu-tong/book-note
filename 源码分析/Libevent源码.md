@@ -109,6 +109,7 @@ struct event {
   ```
   因为这种特殊的结构，TAILQ访问后继和前驱的效率相差很大，后继只要找到filed的next就行。而前驱需要找到当前节点前驱的前驱的next再解引用，要复杂的多。
 ### 2.2Event相关设置
+通过event_set可以设置event对象
 ```c
 void
 event_set(struct event *ev, int fd, short events,
@@ -131,5 +132,111 @@ event_set(struct event *ev, int fd, short events,
 	/* by default, we put new events into the middle priority */
 	if(current_base)
 		ev->ev_pri = current_base->nactivequeues/2;
+}
+```
+可以看到，even_set是把event注册到current_base中取的，可以通过event_base_set重新进行注册。在demo中，我们只有一个Reactor实例，所以设不设置都可以。
+## 3.Reactor框架
+### 3.1event_base结构
+在libevent中，Reactor表现为event_base结构体，声明如下：
+```c
+struct event_base {
+	const struct eventop *evsel; //复用方式封装，select, epoll等
+	void *evbase; //复用采用方式封装的对象
+	int event_count; //事件总数
+	int event_count_active; //激活事件数
+
+	int event_gotterm;		/* Set to terminate loop */
+	int event_break;		/* Set to terminate loop immediately */
+
+	/* active event management */
+	struct event_list **activequeues; //事件优先级队列
+	int nactivequeues; //
+
+	/* signal handling info */
+	struct evsignal_info sig; //信号相关
+
+	struct event_list eventqueue; //事件列表，保存所有事件
+	struct timeval event_tv; //
+
+	struct min_heap timeheap; //定时器小根堆
+
+	struct timeval tv_cache;
+};
+```
+具体见注释，evsel指向的是eventop形成的数组，数组中封装了多种复用方式，包括select,epoll等。
+
+### 3.2初始化event_base
+跟demo中一样，程序需要通过调用event_init来，当中调用event_base_new创建event_base对象，下面列出event_base_new的重要片段:
+```c
+if ((base = calloc(1, sizeof(struct event_base))) == NULL) //从堆中申请一个event_base结构
+		event_err(1, "%s: calloc", __func__);
+gettime(base, &base->event_tv); //获取时间
+min_heap_ctor(&base->timeheap); //初始化定时器堆
+TAILQ_INIT(&base->eventqueue); //初始化事件队列
+
+//早到最前的eventops，并进行初始化
+base->evbase = NULL;
+for (i = 0; eventops[i] && !base->evbase; i++) {
+	base->evsel = eventops[i];
+
+	base->evbase = base->evsel->init(base);
+}
+```
+具体就是申请一个新的event_base，然后对时间、队列等进行初始化，最重要的，在eventops中挑选出第一个有效的，进行初始化。
+### 3.3接口
+Reactor需要提供事件注册，注销的接口，然后根据事件复用接口进行时间循环，当事件就绪时，执行回调函数。
+* 注册事件
+```c
+int
+event_add(struct event *ev, const struct timeval *tv)
+{
+	struct event_base *base = ev->ev_base; //要注册到的reactor
+	//reactor采用的复用操作，evsel配合evbase
+	const struct eventop *evsel = base->evsel;
+	void *evbase = base->evbase;
+	int res = 0;
+
+	//新的timer事件，对堆进行一些操作
+	//TODO(@jingyu):之后看到定时器再具体研究
+	if (tv != NULL && !(ev->ev_flags & EVLIST_TIMEOUT)) {
+		if (min_heap_reserve(&base->timeheap,
+			1 + min_heap_size(&base->timeheap)) == -1)
+			return (-1);  /* ENOMEM == errno */
+	}
+
+	//新的event，调用evsel_add接口进行注册
+	if ((ev->ev_events & (EV_READ|EV_WRITE|EV_SIGNAL)) &&
+	    !(ev->ev_flags & (EVLIST_INSERTED|EVLIST_ACTIVE))) {
+		res = evsel->add(evbase, ev);
+		if (res != -1) //注册成功，添加到已注册链表
+			event_queue_insert(base, ev, EVLIST_INSERTED);
+	}
+
+	//添加定时器事件
+	if (res != -1 && tv != NULL) {
+		struct timeval now;
+
+		//已经添加过了，删除旧的
+		if (ev->ev_flags & EVLIST_TIMEOUT)
+			event_queue_remove(base, ev, EVLIST_TIMEOUT);
+
+		//已经激活，从激活列表删除
+		if ((ev->ev_flags & EVLIST_ACTIVE) &&
+		    (ev->ev_res & EV_TIMEOUT)) {
+			if (ev->ev_ncalls && ev->ev_pncalls) {
+				/* Abort loop */
+				*ev->ev_pncalls = 0;
+			}
+
+			event_queue_remove(base, ev, EVLIST_ACTIVE);
+		}
+
+		//计算定时事件，并插入到小根堆中
+		gettime(base, &now);
+		evutil_timeradd(&now, tv, &ev->ev_timeout);
+
+	}
+
+	return (res);
 }
 ```
