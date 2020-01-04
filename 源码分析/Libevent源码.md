@@ -197,7 +197,6 @@ event_add(struct event *ev, const struct timeval *tv)
 	int res = 0;
 
 	//新的timer事件，对堆进行一些操作
-	//TODO(@jingyu):之后看到定时器再具体研究
 	if (tv != NULL && !(ev->ev_flags & EVLIST_TIMEOUT)) {
 		if (min_heap_reserve(&base->timeheap,
 			1 + min_heap_size(&base->timeheap)) == -1)
@@ -240,3 +239,104 @@ event_add(struct event *ev, const struct timeval *tv)
 	return (res);
 }
 ```
+这里有一些对timer事件的处理，因为注册新的timer事件需要申请新的空间，而这是有可能失败的，这里很巧妙的先进行空间申请，成功的话再进行后序处理，将整个时间注册封装为一个类似原子操作的行为，如果定时器注册失败，那么也就不将事件添加到队列中。
+* 删除事件
+```c
+int
+event_del(struct event *ev)
+{
+	struct event_base *base;
+	const struct eventop *evsel;
+	void *evbase;
+
+	//没有ev_base，也就意味着没有被注册
+	if (ev->ev_base == NULL)
+		return (-1);
+
+	//取得ev注册的event_base和eventop指针
+	base = ev->ev_base;
+	evsel = base->evsel;
+	evbase = base->evbase;
+
+	//设置回调次数为0
+	if (ev->ev_ncalls && ev->ev_pncalls) {
+		/* Abort loop */
+		*ev->ev_pncalls = 0;
+	}
+
+	//从对应队列中删除
+	if (ev->ev_flags & EVLIST_TIMEOUT)
+		event_queue_remove(base, ev, EVLIST_TIMEOUT);
+
+	if (ev->ev_flags & EVLIST_ACTIVE)
+		event_queue_remove(base, ev, EVLIST_ACTIVE);
+
+	//如果是IO或Signal，需要调用IO复用的删除函数
+	if (ev->ev_flags & EVLIST_INSERTED) {
+		event_queue_remove(base, ev, EVLIST_INSERTED);
+		return (evsel->del(evbase, ev));
+	}
+
+	return (0);
+}
+```
+## 4. 事件循环
+![eventloop](/assets/eventloop.png)
+事件循环流程如图，可以看到libevent很好的将IO，Signal以及定时器融合在了一起。
+* IO  
+对于IO事件，可以很自然的利用描述符和IO复用机制进行配合，没有什么好说的。
+* 定时器  
+对于定时器事件，libevent通过小根堆进行组织，然后根据小根堆根节点来设置最长的等待时间，通过这种方式和IO复用机制进行配合。这种方式由于poll和epoll只能支持到ms精度，所以定时精度有限，但是定时器的添加删除等操作均能自己定制，比timerfd效率更高。
+* 信号  
+对于信号本身肯定是不能和IO复用机制进行合作的，但是如果我们能在产生信号后，唤醒IO复用机制，就能将信号和IO复用机制进行联合。
+pipe和socketpair都能做到这一点，只要在信号处理函数中，对写端进行写，然后IO复用对读端进行监听即可，步骤如下：
+	* epoll进行初始化时，会注册socketpair读fd的事件
+	* 注册信号时，会设置信号的回调函数evsignal_handler，在回调中会写入以通知epoll，同时会将信号加入注册队列
+	* 当事件发生，调用信号回调，此时epoll会被唤醒
+	* 唤醒后，遍历链表，查找signal事件，并将发生事件添加到激活列表
+## 5.统一IO复用
+首先，通过eventop封装了所有操作的函数指针
+```c
+struct eventop {
+     const char *name;
+     void *(*init)(struct event_base *); // 初始化
+     int (*add)(void *, struct event *); // 注册事件
+     int (*del)(void *, struct event *); // 删除事件
+     int (*dispatch)(struct event_base *, void *, struct timeval *); // 事件分发
+     void (*dealloc)(struct event_base *, void *); // 注销，释放资源
+     /* set if we need to reinitialize the event base */
+     int need_reinit;
+10};
+```
+然后，通过一个全局数组eventops储存所有支持的eventop对象，如下
+```c
+/* In order of preference */
+static const struct eventop *eventops[] = {
+#ifdef HAVE_EVENT_PORTS
+	&evportops,
+#endif
+#ifdef HAVE_WORKING_KQUEUE
+	&kqops,
+#endif
+#ifdef HAVE_EPOLL
+	&epollops,
+#endif
+#ifdef HAVE_DEVPOLL
+	&devpollops,
+#endif
+#ifdef HAVE_POLL
+	&pollops,
+#endif
+#ifdef HAVE_SELECT
+	&selectops,
+#endif
+#ifdef WIN32
+	&win32ops,
+#endif
+	NULL
+};
+```
+这样，所有支持的操作会按照期望的顺序排列成一个数组。然后，在evenbase初始化时，根据ops进行挑选，并设置。
+
+
+如果是c++的话，我们可以封装一个eventop的抽象类，然后派生出各个可能用的接口，利用多态，我们可以统一的采用基类指针进行操作。
