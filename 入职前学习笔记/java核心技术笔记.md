@@ -13,6 +13,7 @@
   * 比较：equals 方法可以和另一个字符串进行比较，equalsIgnoreCase 可以无视大小写比较。切记，不能用==进行比较，java 中==只用来比较两个引用是不是存储在相同的位置(也就是指针指向地址是否相同)
   * 空串和 null：空串是长度为 0 的实际对象，也就是 str.length() == 0。null 表示该变量目前没有任何对象与之关联
   * 构建：有时候需要不断拼接，来构成字符串，每次拼接效率过于低下，可以用 StringBuilder 类的 append 方法来构建，构建完调用 toString 方法转变为String 类型。
+  * StringBuilder 和 StringBuffer：StringBuffer 是线程安全的，另一个是不安全的，不需要同步时候，Builder 会更快一点。
 
 * 输入输出
 
@@ -311,13 +312,20 @@ java 集合类库采用了接口与实现分离的结构，以队列为例，首
   * Higher/lower：大于或小于 value 的最接近的那个元素，没有返回 null
   * ceiling/floor: 返回大于等于或者小于等于 value 的最接近元素，没有返回 null
   * pollFirst/pollLast：删除集合中最大元素或最小元素，为空返回 null
-* 队列 Queue：java 和 cpp 不一样，java 中的 Queue 是一个借口，常用的实现类是 LinkedList
+* 队列 Queue：java 和 cpp 不一样，java 中的 Queue 是一个接口，常用的实现类是 LinkedList
   * Add：添加到队尾，成功返回 true，队列满了(有的实现，并不是所有都会满)，抛出异常。
   * offer：跟 add 类似，失败返回 false，不抛异常
   * remove(): 队首出队列，为空抛出异常
   * pool：同 remove，为空返回 null
   * Element：返回队首，为空抛出异常
   * peek：同 element，为空返回 null
+* Deque：双端队列接口，实现类有 ArrayDeque 和 LinkedLIst
+  * push(E e)： 入栈
+  * poll/pop()：出栈
+  * peek()：查看栈顶
+  * offer():入队
+  * poll：出队
+  * peek：队首
 
 ## 6.3 映射（k v 对）
 
